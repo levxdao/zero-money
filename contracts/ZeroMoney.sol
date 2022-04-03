@@ -3,13 +3,14 @@
 pragma solidity 0.8.13;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @dev A mintable ERC20 token that allows anyone to pay and distribute ZERO
 ///  to token holders as dividends and allows token holders to withdraw their dividends.
 ///  Reference: https://github.com/Roger-Wu/erc1726-dividend-paying-token/blob/master/contracts/DividendPayingToken.sol
-contract ZeroMoney is ERC20 {
+contract ZeroMoney is ERC20, Ownable {
     using SafeCast for uint256;
     using SafeCast for int256;
 
@@ -19,9 +20,9 @@ contract ZeroMoney is ERC20 {
     uint256 public constant HALVING_PERIOD = 21 days;
     uint256 public constant FINAL_ERA = 60;
 
-    address public immutable signer;
-    uint256 public immutable claimDeadline;
-
+    address public signer;
+    uint256 public startedAt;
+    mapping(address => bool) public blacklisted;
     mapping(address => bool) public claimed;
 
     uint256 internal magnifiedDividendPerShare;
@@ -40,14 +41,29 @@ contract ZeroMoney is ERC20 {
     mapping(address => int256) internal magnifiedDividendCorrections;
     mapping(address => uint256) internal withdrawnDividends;
 
+    event ChangeSigner(address indexed signer);
+    event SetBlacklisted(address indexed account, bool blacklisted);
+    event Start();
+    /// @dev This event MUST emit when ZERO is distributed to token holders.
+    /// @param weiAmount The amount of distributed ZERO in wei.
+    event DividendsDistributed(uint256 weiAmount);
     /// @dev This event MUST emit when an address withdraws their dividend.
     /// @param to The address which withdraws ZERO from this contract.
-    /// @param amount The amount of withdrawn ZERO in wei.
-    event Withdraw(address indexed to, uint256 amount);
+    /// @param weiAmount The amount of withdrawn ZERO in wei.
+    event Withdraw(address indexed to, uint256 weiAmount);
 
-    constructor(address _signer, uint256 _claimDeadline) ERC20("thezero.money", "ZERO") {
+    constructor(address _signer) ERC20("thezero.money", "ZERO") {
         signer = _signer;
-        claimDeadline = _claimDeadline;
+        blacklisted[address(this)] = true;
+
+        emit ChangeSigner(_signer);
+        emit SetBlacklisted(address(this), true);
+    }
+
+    function currentHalvingEra() public view returns (uint256) {
+        if (startedAt == 0) return type(uint256).max;
+        uint256 era = (block.timestamp - startedAt) / HALVING_PERIOD;
+        return FINAL_ERA < era ? FINAL_ERA : era;
     }
 
     /// @notice View the amount of dividend in wei that an address can withdraw.
@@ -75,41 +91,23 @@ contract ZeroMoney is ERC20 {
             .toUint256() / MAGNITUDE;
     }
 
-    function transfer(address to, uint256 amount) public override returns (bool success) {
-        success = super.transfer(to, amount);
+    function changeSigner(address _signer) external onlyOwner {
+        signer = _signer;
 
-        _distribute(amount);
+        emit ChangeSigner(_signer);
     }
 
-    function _distribute(uint256 amount) private {
-        uint256 _now = block.timestamp;
-        uint256 era;
-        if (claimDeadline < _now) {
-            era = (_now - claimDeadline) / HALVING_PERIOD;
-        }
-        if (FINAL_ERA <= era) {
-            return;
-        }
+    function setBlacklisted(address account, bool _blacklisted) external onlyOwner {
+        blacklisted[account] = _blacklisted;
 
-        amount = amount / (era + 1);
-        magnifiedDividendPerShare = magnifiedDividendPerShare + ((amount * MAGNITUDE) / totalSupply());
+        emit SetBlacklisted(account, _blacklisted);
     }
 
-    /// @dev Internal function that transfer tokens from one address to another.
-    /// Update magnifiedDividendCorrections to keep dividends unchanged.
-    /// @param from The address to transfer from.
-    /// @param to The address to transfer to.
-    /// @param value The amount to be transferred.
-    function _transfer(
-        address from,
-        address to,
-        uint256 value
-    ) internal override {
-        super._transfer(from, to, value);
+    function start() external onlyOwner {
+        _mint(msg.sender, totalSupply());
+        startedAt = block.timestamp;
 
-        int256 _magCorrection = (magnifiedDividendPerShare * value).toInt256();
-        magnifiedDividendCorrections[from] += _magCorrection;
-        magnifiedDividendCorrections[to] -= _magCorrection;
+        emit Start();
     }
 
     function claim(
@@ -118,7 +116,6 @@ contract ZeroMoney is ERC20 {
         bytes32 s
     ) external {
         require(!claimed[msg.sender], "ZERO: CLAIMED");
-        require(block.timestamp < claimDeadline, "ZERO: EXPIRED");
 
         bytes32 message = keccak256(abi.encodePacked(msg.sender));
         require(ECDSA.recover(ECDSA.toEthSignedMessageHash(message), v, r, s) == signer, "ZERO: UNAUTHORIZED");
@@ -128,14 +125,78 @@ contract ZeroMoney is ERC20 {
         _mint(msg.sender, 1 ether);
     }
 
+    /// @dev Internal function that mints tokens to an account.
+    /// Update magnifiedDividendCorrections to keep dividends unchanged.
+    /// @param account The account that will receive the created tokens.
+    /// @param value The amount that will be created.
+    function _mint(address account, uint256 value) internal override {
+        super._mint(account, value);
+
+        magnifiedDividendCorrections[account] -= (magnifiedDividendPerShare * value).toInt256();
+    }
+
+    /// @dev Internal function that transfer tokens from one address to another.
+    /// Update magnifiedDividendCorrections to keep dividends unchanged.
+    /// @param from The address to transfer from.
+    /// @param to The address to transfer to.
+    /// @param amount The amount to be transferred.
+    function _transfer(
+        address from,
+        address to,
+        uint256 amount
+    ) internal override {
+        super._transfer(from, to, amount);
+
+        int256 _magCorrection = (magnifiedDividendPerShare * amount).toInt256();
+        magnifiedDividendCorrections[from] += _magCorrection;
+        magnifiedDividendCorrections[to] -= _magCorrection;
+
+        if (startedAt > 0 && !blacklisted[from]) {
+            _distributeDividends(amount);
+        }
+    }
+
+    /// @notice Distributes ZERO to token holders as dividends.
+    /// @dev It emits the `DividendsDistributed` event if the amount of received ZERO is greater than 0.
+    /// About undistributed ZERO:
+    ///   In each distribution, there is a small amount of ZERO not distributed,
+    ///     the magnified amount of which is
+    ///     `(msg.value * magnitude) % totalSupply()`.
+    ///   With a well-chosen `magnitude`, the amount of undistributed ZERO
+    ///     (de-magnified) in a distribution can be less than 1 wei.
+    ///   We can actually keep track of the undistributed ZERO in a distribution
+    ///     and try to distribute it in the next distribution,
+    ///     but keeping track of such data on-chain costs much more than
+    ///     the saved ZERO, so we don't do that.
+    function _distributeDividends(uint256 amount) private {
+        uint256 era = (block.timestamp - startedAt) / HALVING_PERIOD;
+        if (FINAL_ERA <= era) {
+            return;
+        }
+
+        amount = amount / (2**era);
+        magnifiedDividendPerShare += ((amount * MAGNITUDE) / totalSupply());
+        _mint(address(this), amount);
+        emit DividendsDistributed(amount);
+    }
+
     /// @notice Withdraws dividends distributed to the sender.
     /// @dev It emits a `Withdraw` event if the amount of withdrawn ZERO is greater than 0.
     function withdrawDividend() public {
         uint256 _withdrawableDividend = withdrawableDividendOf(msg.sender);
-        if (_withdrawableDividend > 0) {
-            withdrawnDividends[msg.sender] += _withdrawableDividend;
-            emit Withdraw(msg.sender, _withdrawableDividend);
-            _mint(msg.sender, _withdrawableDividend);
-        }
+        require(_withdrawableDividend > 0, "ZERO: ZERO_DIVIDEND");
+
+        withdrawnDividends[msg.sender] += _withdrawableDividend;
+        _transfer(address(this), msg.sender, _withdrawableDividend);
+        emit Withdraw(msg.sender, _withdrawableDividend);
+    }
+
+    /// @dev External function that burns an amount of the token of a given account.
+    /// Update magnifiedDividendCorrections to keep dividends unchanged.
+    /// @param value The amount that will be burnt.
+    function burn(uint256 value) public {
+        _burn(msg.sender, value);
+
+        magnifiedDividendCorrections[msg.sender] += (magnifiedDividendPerShare * value).toInt256();
     }
 }
