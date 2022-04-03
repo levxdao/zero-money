@@ -66,6 +66,7 @@ const config: HardhatUserConfig = {
             live: false,
             saveDeployments: true,
             tags: ["test", "local"],
+            initialBaseFeePerGas: 0,
         },
         mainnet: {
             url: `https://mainnet.infura.io/v3/${process.env.INFURA_API_KEY}`,
