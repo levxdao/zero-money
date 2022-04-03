@@ -13,6 +13,12 @@
   },
   "license": "WTFPL",
   "author": "LevX <team@levx.io>",
+  "files": [
+    "artifacts",
+    "contracts",
+    "deployments",
+    "typechain"
+  ],
   "scripts": {
     "build": "hardhat compile",
     "console": "hardhat console",
@@ -94,5 +100,6 @@
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.5.0"
-  }
+  },
+  "version": "1.0.0"
 }
