@@ -5,13 +5,16 @@ import { BigNumber, Signer, utils } from "ethers";
 import { expect } from "chai";
 
 const { constants } = ethers;
-const { WeiPerEther, MaxUint256, Zero } = constants;
+const { WeiPerEther, MaxUint256, Zero, HashZero } = constants;
 
 ethers.utils.Logger.setLogLevel(ethers.utils.Logger.levels.ERROR); // turn off warnings
 
 const HALVING_PERIOD = 21 * 24 * 60 * 60;
 const FINAL_ERA = 60;
 const ONE_ZERO = WeiPerEther;
+const ID_ALICE = "0x0000000000000000000000000000000000000000000000000000000000000001";
+const ID_BOB = "0x0000000000000000000000000000000000000000000000000000000000000002";
+const ID_CAROL = "0x0000000000000000000000000000000000000000000000000000000000000003";
 
 const setupTest = async () => {
     const signers = await ethers.getSigners();
@@ -30,8 +33,8 @@ const setupTest = async () => {
     };
 };
 
-const sign = async (address: string, signer: Signer) => {
-    const message = utils.solidityKeccak256(["address"], [address]);
+const sign = async (id: string, address: string, signer: Signer) => {
+    const message = utils.solidityKeccak256(["bytes32", "address"], [id, address]);
     return utils.splitSignature(await signer.signMessage(utils.arrayify(message)));
 };
 
@@ -70,36 +73,41 @@ describe("ZeroMoney", () => {
     it("should claim", async () => {
         const { signer, alice, bob, carol, zero } = await setupTest();
 
-        const byAlice = await sign(alice.address, alice);
-        await expect(zero.connect(alice).claim(byAlice.v, byAlice.r, byAlice.s)).to.be.revertedWith(
+        const byAlice = await sign(ID_ALICE, alice.address, alice);
+        await expect(zero.connect(alice).claim(ID_ALICE, byAlice.v, byAlice.r, byAlice.s)).to.be.revertedWith(
             "ZERO: UNAUTHORIZED"
         );
 
         expect(await zero.totalSupply()).to.be.equal(0);
 
-        const forAlice = utils.splitSignature(await sign(alice.address, signer));
-        await zero.connect(alice).claim(forAlice.v, forAlice.r, forAlice.s);
+        const forAlice = utils.splitSignature(await sign(ID_ALICE, alice.address, signer));
+        await expect(zero.connect(alice).claim(HashZero, forAlice.v, forAlice.r, forAlice.s)).to.be.revertedWith(
+            "ZERO: INVALID_ID"
+        );
+        await zero.connect(alice).claim(ID_ALICE, forAlice.v, forAlice.r, forAlice.s);
         expect(await zero.totalSupply()).to.be.equal(ONE_ZERO);
 
-        await expect(zero.connect(alice).claim(forAlice.v, forAlice.r, forAlice.s)).to.be.revertedWith("ZERO: CLAIMED");
-        await expect(zero.connect(bob).claim(forAlice.v, forAlice.r, forAlice.s)).to.be.revertedWith(
+        await expect(zero.connect(alice).claim(ID_ALICE, forAlice.v, forAlice.r, forAlice.s)).to.be.revertedWith(
+            "ZERO: CLAIMED"
+        );
+        await expect(zero.connect(bob).claim(ID_BOB, forAlice.v, forAlice.r, forAlice.s)).to.be.revertedWith(
             "ZERO: UNAUTHORIZED"
         );
 
-        const forBob = utils.splitSignature(await sign(bob.address, signer));
-        await zero.connect(bob).claim(forBob.v, forBob.r, forBob.s);
+        const forBob = utils.splitSignature(await sign(ID_BOB, bob.address, signer));
+        await zero.connect(bob).claim(ID_BOB, forBob.v, forBob.r, forBob.s);
         expect(await zero.totalSupply()).to.be.equal(ONE_ZERO.mul(2));
 
         await zero.changeSigner(alice.address);
         expect(await zero.callStatic.signer()).to.be.equal(alice.address);
 
-        const forCarol = utils.splitSignature(await sign(carol.address, signer));
-        await expect(zero.connect(carol).claim(forCarol.v, forCarol.r, forCarol.s)).to.revertedWith(
+        const forCarol = utils.splitSignature(await sign(ID_CAROL, carol.address, signer));
+        await expect(zero.connect(carol).claim(ID_CAROL, forCarol.v, forCarol.r, forCarol.s)).to.revertedWith(
             "ZERO: UNAUTHORIZED"
         );
 
         await zero.changeSigner(signer.address);
-        await zero.connect(carol).claim(forCarol.v, forCarol.r, forCarol.s);
+        await zero.connect(carol).claim(ID_CAROL, forCarol.v, forCarol.r, forCarol.s);
         expect(await zero.totalSupply()).to.be.equal(ONE_ZERO.mul(3));
     });
 
@@ -108,8 +116,8 @@ describe("ZeroMoney", () => {
 
         expect(await zero.totalSupply()).to.be.equal(0);
 
-        const forAlice = utils.splitSignature(await sign(alice.address, signer));
-        await zero.connect(alice).claim(forAlice.v, forAlice.r, forAlice.s);
+        const forAlice = utils.splitSignature(await sign(ID_ALICE, alice.address, signer));
+        await zero.connect(alice).claim(ID_ALICE, forAlice.v, forAlice.r, forAlice.s);
         expect(await zero.totalSupply()).to.be.equal(ONE_ZERO);
 
         await zero.connect(alice).transfer(bob.address, ONE_ZERO);
@@ -125,8 +133,8 @@ describe("ZeroMoney", () => {
 
         expect(await zero.totalSupply()).to.be.equal(0);
 
-        const forAlice = utils.splitSignature(await sign(alice.address, signer));
-        await zero.connect(alice).claim(forAlice.v, forAlice.r, forAlice.s);
+        const forAlice = utils.splitSignature(await sign(ID_ALICE, alice.address, signer));
+        await zero.connect(alice).claim(ID_ALICE, forAlice.v, forAlice.r, forAlice.s);
         expect(await zero.totalSupply()).to.be.equal(ONE_ZERO);
 
         expect(await zero.blacklisted(alice.address)).to.be.equal(false);
@@ -144,8 +152,8 @@ describe("ZeroMoney", () => {
 
         expect(await zero.totalSupply()).to.be.equal(0);
 
-        const forAlice = utils.splitSignature(await sign(alice.address, signer));
-        await zero.connect(alice).claim(forAlice.v, forAlice.r, forAlice.s);
+        const forAlice = utils.splitSignature(await sign(ID_ALICE, alice.address, signer));
+        await zero.connect(alice).claim(ID_ALICE, forAlice.v, forAlice.r, forAlice.s);
         expect(await zero.totalSupply()).to.be.equal(ONE_ZERO);
 
         await zero.start();
@@ -177,8 +185,8 @@ describe("ZeroMoney", () => {
     it("should NOT distribute after FINAL_ERA", async () => {
         const { deployer, signer, alice, bob, zero } = await setupTest();
 
-        const forAlice = utils.splitSignature(await sign(alice.address, signer));
-        await zero.connect(alice).claim(forAlice.v, forAlice.r, forAlice.s);
+        const forAlice = utils.splitSignature(await sign(ID_ALICE, alice.address, signer));
+        await zero.connect(alice).claim(ID_ALICE, forAlice.v, forAlice.r, forAlice.s);
         expect(await zero.totalSupply()).to.be.equal(ONE_ZERO);
 
         expect(await zero.currentHalvingEra()).to.be.equal(MaxUint256);
@@ -201,13 +209,13 @@ describe("ZeroMoney", () => {
 
         expect(await zero.totalSupply()).to.be.equal(0);
 
-        const forAlice = utils.splitSignature(await sign(alice.address, signer));
-        await zero.connect(alice).claim(forAlice.v, forAlice.r, forAlice.s);
+        const forAlice = utils.splitSignature(await sign(ID_ALICE, alice.address, signer));
+        await zero.connect(alice).claim(ID_ALICE, forAlice.v, forAlice.r, forAlice.s);
         await zero.start();
-        const forBob = utils.splitSignature(await sign(bob.address, signer));
-        await zero.connect(bob).claim(forBob.v, forBob.r, forBob.s);
-        const forCarol = utils.splitSignature(await sign(carol.address, signer));
-        await zero.connect(carol).claim(forCarol.v, forCarol.r, forCarol.s);
+        const forBob = utils.splitSignature(await sign(ID_BOB, bob.address, signer));
+        await zero.connect(bob).claim(ID_BOB, forBob.v, forBob.r, forBob.s);
+        const forCarol = utils.splitSignature(await sign(ID_CAROL, carol.address, signer));
+        await zero.connect(carol).claim(ID_CAROL, forCarol.v, forCarol.r, forCarol.s);
 
         expect(await zero.totalSupply()).to.be.equal(ONE_ZERO.mul(4));
 
@@ -286,8 +294,8 @@ describe("ZeroMoney", () => {
     it("should burn", async () => {
         const { signer, alice, zero } = await setupTest();
 
-        const forAlice = utils.splitSignature(await sign(alice.address, signer));
-        await zero.connect(alice).claim(forAlice.v, forAlice.r, forAlice.s);
+        const forAlice = utils.splitSignature(await sign(ID_ALICE, alice.address, signer));
+        await zero.connect(alice).claim(ID_ALICE, forAlice.v, forAlice.r, forAlice.s);
         expect(await zero.balanceOf(alice.address)).to.be.equal(ONE_ZERO);
 
         await zero.connect(alice).burn(ONE_ZERO.div(4));

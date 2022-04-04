@@ -23,7 +23,7 @@ contract ZeroMoney is ERC20, Ownable {
     address public signer;
     uint256 public startedAt;
     mapping(address => bool) public blacklisted;
-    mapping(address => bool) public claimed;
+    mapping(bytes32 => bool) internal _claimed;
 
     uint256 internal magnifiedDividendPerShare;
 
@@ -44,6 +44,7 @@ contract ZeroMoney is ERC20, Ownable {
     event ChangeSigner(address indexed signer);
     event SetBlacklisted(address indexed account, bool blacklisted);
     event Start();
+    event Claim(bytes32 indexed id, address indexed to);
     /// @dev This event MUST emit when ZERO is distributed to token holders.
     /// @param weiAmount The amount of distributed ZERO in wei.
     event DividendsDistributed(uint256 weiAmount);
@@ -111,18 +112,21 @@ contract ZeroMoney is ERC20, Ownable {
     }
 
     function claim(
+        bytes32 id,
         uint8 v,
         bytes32 r,
         bytes32 s
     ) external {
-        require(!claimed[msg.sender], "ZERO: CLAIMED");
+        require(id != bytes32(0), "ZERO: INVALID_ID");
+        require(!_claimed[id], "ZERO: CLAIMED");
 
-        bytes32 message = keccak256(abi.encodePacked(msg.sender));
+        bytes32 message = keccak256(abi.encodePacked(id, msg.sender));
         require(ECDSA.recover(ECDSA.toEthSignedMessageHash(message), v, r, s) == signer, "ZERO: UNAUTHORIZED");
 
-        claimed[msg.sender] = true;
-
+        _claimed[id] = true;
         _mint(msg.sender, 1 ether);
+
+        emit Claim(id, msg.sender);
     }
 
     /// @dev Internal function that mints tokens to an account.
