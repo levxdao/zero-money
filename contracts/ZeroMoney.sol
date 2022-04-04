@@ -53,7 +53,7 @@ contract ZeroMoney is ERC20, Ownable {
     /// @param weiAmount The amount of withdrawn ZERO in wei.
     event Withdraw(address indexed to, uint256 weiAmount);
 
-    constructor(address _signer) ERC20("thezero.money", "ZERO") {
+    constructor(address _signer) ERC20("Zero Money", "ZERO") {
         signer = _signer;
         blacklisted[address(this)] = true;
 
